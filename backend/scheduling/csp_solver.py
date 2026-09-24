@@ -41,6 +41,8 @@ class CSPScheduler:
         self.classroom_usage = defaultdict(set)
         self.teacher_usage = defaultdict(set)
         self.class_usage = defaultdict(set)
+        # teacher_id -> {(day, period), ...} 临时停排时段
+        self.teacher_blocked_slots: Dict[int, Set[Tuple[int, int]]] = defaultdict(set)
         self.assignments = []
         self.conflicts = []
 
@@ -72,6 +74,9 @@ class CSPScheduler:
     ) -> bool:
         if teacher_available_slots and time_slot not in teacher_available_slots:
             return False
+        # 教师临时停排（请假、校外培训等）时段不可安排
+        if (time_slot.day, time_slot.period) in self.teacher_blocked_slots.get(teacher_id, set()):
+            return False
         if time_slot in self.teacher_usage[teacher_id]:
             return False
         if time_slot in self.class_usage[class_id]:
@@ -101,13 +106,15 @@ class CSPScheduler:
         tasks: List[SchedulingTask],
         classrooms_data: Dict[int, Dict],
         teachers_data: Dict[int, Dict],
-        locked_entries: Optional[List[Dict]] = None
+        locked_entries: Optional[List[Dict]] = None,
+        teacher_blocked_slots: Optional[Dict[int, Set[Tuple[int, int]]]] = None
     ) -> Tuple[List[Dict], List[Dict]]:
         self.assignments = []
         self.conflicts = []
         self.classroom_usage.clear()
         self.teacher_usage.clear()
         self.class_usage.clear()
+        self.teacher_blocked_slots = defaultdict(set, teacher_blocked_slots or {})
 
         if locked_entries:
             for entry in locked_entries:

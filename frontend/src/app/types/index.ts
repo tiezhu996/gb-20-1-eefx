@@ -83,6 +83,9 @@ export interface ScheduleEntry {
   conflict_type?: string;
   original_teacher?: number;
   original_teacher_name?: string;
+  suspension_conflict?: boolean;
+  suspension_reason?: string | null;
+  suspension_date?: string | null;
   course_name?: string;
   teacher_name?: string;
   classroom_name?: string;
@@ -132,4 +135,45 @@ export interface Substitute {
   substitute_teacher_name?: string;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface TeacherSuspension {
+  id: number;
+  teacher: number;
+  semester: number;
+  date: string;
+  start_period: number;
+  end_period: number;
+  period_count: number;
+  day_of_week: number;
+  reason: string;
+  is_active: boolean;
+  cancelled_at?: string | null;
+  teacher_name?: string;
+  semester_name?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface LockedSuspensionConflict {
+  entry_id: number;
+  teacher_id: number;
+  teacher_name: string;
+  class_id: number;
+  class_name: string;
+  course_name: string;
+  day_of_week: number;
+  period: number;
+  suspension_id: number;
+  suspension_date: string;
+  suspension_reason: string;
+  message: string;
+}
+
+export interface AutoScheduleResult {
+  schedule: ScheduleEntry[];
+  conflicts: any[];
+  scheduling_messages: { type?: string; message?: string }[];
+  locked_suspension_conflicts: LockedSuspensionConflict[];
+  total_entries: number;
 }

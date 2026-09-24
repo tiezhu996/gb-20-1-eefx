@@ -1,4 +1,5 @@
 from django.http import HttpResponse
+from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -6,16 +7,22 @@ from rest_framework.permissions import AllowAny
 from django.db import transaction
 from core.models import Semester, Classroom, Teacher, Class
 from .models import (
-    ClassCourse, ScheduleEntry, Conflict, SwapRequest, Substitute
+    ClassCourse, ScheduleEntry, Conflict, SwapRequest, Substitute,
+    TeacherSuspension
 )
 from .serializers import (
     ClassCourseSerializer, ScheduleEntrySerializer,
     ScheduleEntryDetailSerializer, ConflictSerializer,
     SwapRequestSerializer, SubstituteSerializer,
+    TeacherSuspensionSerializer, TeacherSuspensionCreateSerializer,
     AutoScheduleRequestSerializer, ConflictCheckSerializer,
     SwapScheduleRequestSerializer, SubstituteRequestSerializer
 )
 from .csp_solver import CSPScheduler, ConflictDetector, SchedulingTask, TimeSlot
+from .suspensions import (
+    get_active_suspensions, build_blocked_slots,
+    find_locked_suspension_conflicts, validate_swap
+)
 from .pdf_export import (
     generate_class_timetable_pdf,
     generate_teacher_timetable_pdf,
@@ -142,9 +149,14 @@ class ScheduleEntryViewSet(viewsets.ModelViewSet):
             )
             locked_entries = list(locked)
 
+        # 生效中的教师临时停排时段，排课时必须避开
+        active_suspensions = get_active_suspensions(semester)
+        teacher_blocked_slots = build_blocked_slots(active_suspensions)
+
         scheduler = CSPScheduler(semester)
         assignments, scheduling_conflicts = scheduler.schedule(
-            tasks, classrooms_data, teachers_data, locked_entries
+            tasks, classrooms_data, teachers_data, locked_entries,
+            teacher_blocked_slots=teacher_blocked_slots
         )
 
         with transaction.atomic():
@@ -204,10 +216,18 @@ class ScheduleEntryViewSet(viewsets.ModelViewSet):
         final_entries = ScheduleEntry.objects.filter(semester=semester)
         serializer = ScheduleEntryDetailSerializer(final_entries, many=True)
 
+        # 锁定课保留在原处；若恰好落在停排时段内，单独标出供教务调整
+        locked_suspension_conflicts = []
+        if respect_locked:
+            locked_suspension_conflicts = find_locked_suspension_conflicts(
+                semester, active_suspensions
+            )
+
         return Response({
             'schedule': serializer.data,
             'conflicts': conflicts,
             'scheduling_messages': scheduling_conflicts,
+            'locked_suspension_conflicts': locked_suspension_conflicts,
             'total_entries': len(serializer.data)
         })
 
@@ -228,6 +248,28 @@ class ScheduleEntryViewSet(viewsets.ModelViewSet):
         return Response({'conflicts': conflicts})
 
     @action(detail=False, methods=['post'])
+    def check_swap(self, request):
+        """互换前校验（不真正执行），供前端在提交前提示"""
+        req_serializer = SwapScheduleRequestSerializer(data=request.data)
+        if not req_serializer.is_valid():
+            return Response(req_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        entry1_id = req_serializer.validated_data['entry1_id']
+        entry2_id = req_serializer.validated_data['entry2_id']
+        try:
+            entry1 = ScheduleEntry.objects.select_related('teacher').get(id=entry1_id)
+            entry2 = ScheduleEntry.objects.select_related('teacher').get(id=entry2_id)
+        except ScheduleEntry.DoesNotExist:
+            return Response(
+                {'error': 'One or both entries not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        suspensions = get_active_suspensions(entry1.semester)
+        errors = validate_swap(entry1, entry2, suspensions)
+        return Response({'valid': not errors, 'errors': errors})
+
+    @action(detail=False, methods=['post'])
     def swap(self, request):
         req_serializer = SwapScheduleRequestSerializer(data=request.data)
         if not req_serializer.is_valid():
@@ -238,12 +280,21 @@ class ScheduleEntryViewSet(viewsets.ModelViewSet):
         reason = req_serializer.validated_data.get('reason', '')
 
         try:
-            entry1 = ScheduleEntry.objects.get(id=entry1_id)
-            entry2 = ScheduleEntry.objects.get(id=entry2_id)
+            entry1 = ScheduleEntry.objects.select_related('teacher').get(id=entry1_id)
+            entry2 = ScheduleEntry.objects.select_related('teacher').get(id=entry2_id)
         except ScheduleEntry.DoesNotExist:
             return Response(
                 {'error': 'One or both entries not found'},
                 status=status.HTTP_404_NOT_FOUND
+            )
+
+        # 手工互换前先校验：锁定课不能动、不能换到教师停排时段
+        suspensions = get_active_suspensions(entry1.semester)
+        errors = validate_swap(entry1, entry2, suspensions)
+        if errors:
+            return Response(
+                {'error': 'Swap validation failed', 'errors': errors},
+                status=status.HTTP_400_BAD_REQUEST
             )
 
         with transaction.atomic():
@@ -376,3 +427,67 @@ class SubstituteViewSet(viewsets.ModelViewSet):
     )
     serializer_class = SubstituteSerializer
     permission_classes = [AllowAny]
+
+
+class TeacherSuspensionViewSet(viewsets.ModelViewSet):
+    """教师临时停排登记管理"""
+    queryset = TeacherSuspension.objects.all().select_related(
+        'teacher', 'semester'
+    )
+    serializer_class = TeacherSuspensionSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        teacher_id = self.request.query_params.get('teacher_id')
+        semester_id = self.request.query_params.get('semester_id')
+        is_active = self.request.query_params.get('is_active')
+        if teacher_id:
+            qs = qs.filter(teacher_id=teacher_id)
+        if semester_id:
+            qs = qs.filter(semester_id=semester_id)
+        if is_active is not None:
+            qs = qs.filter(is_active=is_active.lower() in ('true', '1'))
+        return qs
+
+    def create(self, request, *args, **kwargs):
+        req_serializer = TeacherSuspensionCreateSerializer(data=request.data)
+        if not req_serializer.is_valid():
+            return Response(
+                req_serializer.errors, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        data = req_serializer.validated_data
+        suspension = TeacherSuspension(
+            teacher=data['_teacher'],
+            semester=data['_semester'],
+            date=data['date'],
+            start_period=data['start_period'],
+            end_period=data['end_period'],
+            reason=data['reason'],
+        )
+        try:
+            suspension.full_clean()
+        except Exception as e:
+            return Response(
+                {'error': e.message_dict if hasattr(e, 'message_dict') else str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        suspension.save()
+
+        serializer = self.get_serializer(suspension)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """取消停排（软删除，记录保留），之后该时段恢复正常排课"""
+        suspension = self.get_object()
+        if not suspension.is_active:
+            return Response(
+                {'error': '该停排登记已取消'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        suspension.is_active = False
+        suspension.cancelled_at = timezone.now()
+        suspension.save(update_fields=['is_active', 'cancelled_at', 'updated_at'])
+        return Response(self.get_serializer(suspension).data)

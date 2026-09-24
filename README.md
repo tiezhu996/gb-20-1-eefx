@@ -80,6 +80,7 @@ npm start
 | 课程分配 | 为每个班级配置课程和任课教师 |
 | 自动排课 | 基于约束满足问题(CSP)的智能排课算法 |
 | 手动调整 | 支持锁定课程、拖拽调整（后端API就绪） |
+| 教师临时停排 | 登记教师请假/校外培训时段，自动排课自动避开，锁定课撞停排单独标出 |
 | 冲突检测 | 自动检测教师/教室/班级三类时间冲突 |
 | 调课代课 | 支持课程交换和教师代课安排 |
 | 课表查看 | 班级/教师/教室三种视角的课表展示 |
@@ -242,6 +243,7 @@ docker compose exec backend python manage.py createsuperuser
   - 同一教室同一时间只能安排一门课
   - 同一班级同一时间只能上一门课
   - 教师可用时间段限制
+  - 教师临时停排时段（请假、校外培训等登记）不可排课
   - 教室容量限制
   - 课程对教室类型的要求
 
@@ -263,8 +265,11 @@ docker compose exec backend python manage.py createsuperuser
 | `/api/schedules/by_class/?semester_id=&class_id=` | GET | 按班级查询课表 |
 | `/api/schedules/by_teacher/?semester_id=&teacher_id=` | GET | 按教师查询课表 |
 | `/api/schedules/by_classroom/?semester_id=&classroom_id=` | GET | 按教室查询课表 |
-| `/api/schedules/auto_schedule/` | POST | 执行自动排课 |
-| `/api/schedules/swap/` | POST | 交换两个课表条目 |
+| `/api/schedules/auto_schedule/` | POST | 执行自动排课（自动避开教师临时停排时段） |
+| `/api/schedules/swap/` | POST | 交换两个课表条目（互换前校验停排与锁定） |
+| `/api/schedules/check_swap/` | POST | 互换前预校验，返回 `{valid, errors}` |
+| `/api/teacher-suspensions/` | GET/POST | 临时停排登记查询/新增（支持 teacher_id、semester_id、is_active 过滤） |
+| `/api/teacher-suspensions/{id}/cancel/` | POST | 取消停排（软删除，记录保留） |
 | `/api/schedules/substitute/` | POST | 安排代课教师 |
 | `/api/schedules/export_pdf/?type=&id=&semester_id=` | GET | 导出 PDF 课表 |
 | `/api/conflicts/` | GET | 查询冲突列表 |

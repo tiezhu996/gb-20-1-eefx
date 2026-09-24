@@ -4,7 +4,8 @@ import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 import type {
   Classroom, Teacher, Class, Course, Semester,
-  ClassCourse, ScheduleEntry, Conflict, SwapRequest, Substitute
+  ClassCourse, ScheduleEntry, Conflict, SwapRequest, Substitute,
+  TeacherSuspension, AutoScheduleResult
 } from '../types';
 
 @Injectable({ providedIn: 'root' })
@@ -137,8 +138,8 @@ export class ApiService {
     return this.http.patch<ScheduleEntry>(`${this.baseUrl}/schedules/${id}/`, data);
   }
 
-  autoSchedule(semesterId: number, respectLocked = true): Observable<any> {
-    return this.http.post(`${this.baseUrl}/schedules/auto_schedule/`, {
+  autoSchedule(semesterId: number, respectLocked = true): Observable<AutoScheduleResult> {
+    return this.http.post<AutoScheduleResult>(`${this.baseUrl}/schedules/auto_schedule/`, {
       semester_id: semesterId,
       respect_locked: respectLocked
     });
@@ -150,6 +151,13 @@ export class ApiService {
       entry2_id: entry2Id,
       reason
     });
+  }
+
+  checkSwap(entry1Id: number, entry2Id: number): Observable<{ valid: boolean; errors: string[] }> {
+    return this.http.post<{ valid: boolean; errors: string[] }>(
+      `${this.baseUrl}/schedules/check_swap/`,
+      { entry1_id: entry1Id, entry2_id: entry2Id }
+    );
   }
 
   assignSubstitute(entryId: number, substituteTeacherId: number, startDate: string, endDate: string, reason: string): Observable<any> {
@@ -172,6 +180,47 @@ export class ApiService {
 
   getSubstitutes(): Observable<Substitute[]> {
     return this.http.get<Substitute[]>(`${this.baseUrl}/substitutes/`);
+  }
+
+  getTeacherSuspensions(params?: {
+    teacherId?: number; semesterId?: number; isActive?: boolean;
+  }): Observable<TeacherSuspension[]> {
+    let httpParams = new HttpParams();
+    if (params?.teacherId !== undefined) {
+      httpParams = httpParams.set('teacher_id', params.teacherId.toString());
+    }
+    if (params?.semesterId !== undefined) {
+      httpParams = httpParams.set('semester_id', params.semesterId.toString());
+    }
+    if (params?.isActive !== undefined) {
+      httpParams = httpParams.set('is_active', String(params.isActive));
+    }
+    return this.http.get<TeacherSuspension[]>(
+      `${this.baseUrl}/teacher-suspensions/`, { params: httpParams }
+    );
+  }
+
+  createTeacherSuspension(data: {
+    teacher: number;
+    semester: number;
+    date: string;
+    start_period: number;
+    period_count: number;
+    reason: string;
+  }): Observable<TeacherSuspension> {
+    return this.http.post<TeacherSuspension>(
+      `${this.baseUrl}/teacher-suspensions/`, data
+    );
+  }
+
+  cancelTeacherSuspension(id: number): Observable<TeacherSuspension> {
+    return this.http.post<TeacherSuspension>(
+      `${this.baseUrl}/teacher-suspensions/${id}/cancel/`, {}
+    );
+  }
+
+  deleteTeacherSuspension(id: number): Observable<void> {
+    return this.http.delete<void>(`${this.baseUrl}/teacher-suspensions/${id}/`);
   }
 
   exportPdf(semesterId: number, type: 'class' | 'teacher' | 'classroom', id: number): Observable<Blob> {

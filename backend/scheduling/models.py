@@ -1,4 +1,5 @@
 from django.db import models
+from django.core.exceptions import ValidationError
 from core.models import Classroom, Teacher, Class, Course, Semester
 
 
@@ -123,3 +124,75 @@ class Substitute(models.Model):
 
     def __str__(self):
         return f"{self.substitute_teacher} 代 {self.original_teacher}"
+
+
+class TeacherSuspension(models.Model):
+    """教师临时停排登记（请假、外出培训等）。
+
+    登记后该教师在指定日期的连续若干节课不再参与自动排课，
+    手工互换课表时也会先校验；可随时取消（软删除，保留登记记录）。
+    """
+    teacher = models.ForeignKey(
+        Teacher, on_delete=models.CASCADE, related_name='suspensions'
+    )
+    semester = models.ForeignKey(
+        Semester, on_delete=models.CASCADE, related_name='teacher_suspensions'
+    )
+    date = models.DateField(help_text='停排日期')
+    start_period = models.IntegerField(help_text='起始节次（第几节开始）')
+    end_period = models.IntegerField(help_text='结束节次（连续几节，含本节）')
+    reason = models.TextField(help_text='停排原因，如请假、校外培训')
+    is_active = models.BooleanField(default=True, help_text='取消后变为 False，记录保留')
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-date', '-start_period']
+
+    def __str__(self):
+        return (f"{self.teacher.name} {self.date} "
+                f"第{self.start_period}-{self.end_period}节停排")
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.start_period is not None and self.end_period is not None:
+            if self.start_period < 1:
+                errors['start_period'] = '起始节次必须大于等于 1'
+            if self.end_period < self.start_period:
+                errors['end_period'] = '结束节次不能早于起始节次'
+        if self.semester_id and self.date:
+            if not (self.semester.start_date <= self.date <= self.semester.end_date):
+                errors['date'] = '停排日期必须在学期日期范围内'
+
+        if self.is_active and not errors:
+            qs = TeacherSuspension.objects.filter(
+                teacher=self.teacher,
+                semester=self.semester,
+                date=self.date,
+                is_active=True,
+                start_period__lte=self.end_period,
+                end_period__gte=self.start_period,
+            )
+            if self.pk:
+                qs = qs.exclude(pk=self.pk)
+            if qs.exists():
+                errors['__all__'] = '该教师在同一天的这一节次区间已有生效中的停排登记'
+
+        if errors:
+            raise ValidationError(errors)
+
+    @property
+    def period_count(self):
+        """连续节数"""
+        return self.end_period - self.start_period + 1
+
+    @property
+    def day_of_week(self):
+        """1=周一 ... 7=周日"""
+        return self.date.isoweekday()
+
+    def covers_slot(self, day_of_week, period):
+        return (self.day_of_week == day_of_week
+                and self.start_period <= period <= self.end_period)

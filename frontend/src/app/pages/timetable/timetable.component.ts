@@ -15,7 +15,8 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import { ApiService } from '../../services/api.service';
 import type {
-  ScheduleEntry, Semester, Class, Teacher, Classroom
+  ScheduleEntry, Semester, Class, Teacher, Classroom,
+  AutoScheduleResult, LockedSuspensionConflict
 } from '../../types';
 
 @Component({
@@ -86,7 +87,7 @@ import type {
       </div>
 
       <div class="action-bar">
-        <button mat-raised-button color="primary" (click)="runAutoSchedule()" [disabled]="!selectedSemesterId">
+        <button mat-raised-button color="primary" (click)="runAutoSchedule(true)" [disabled]="!selectedSemesterId">
           <mat-icon>auto_awesome</mat-icon>
           自动排课
         </button>
@@ -98,6 +99,17 @@ import type {
           <mat-icon>refresh</mat-icon>
           刷新
         </button>
+        <span class="swap-hint">手工互换：点击两节课选中后点「互换选中课程」，系统会先校验停排与锁定</span>
+        <button mat-raised-button color="accent"
+                (click)="swapSelected()"
+                [disabled]="swapSelections.length !== 2">
+          <mat-icon>swap_horiz</mat-icon>
+          互换选中课程（{{ swapSelections.length }}/2）
+        </button>
+        <button mat-button (click)="clearSwapSelection()"
+                *ngIf="swapSelections.length > 0">
+          清除选择
+        </button>
         <button mat-raised-button color="accent" (click)="exportPdf()" [disabled]="!canExport">
           <mat-icon>picture_as_pdf</mat-icon>
           导出 PDF
@@ -106,6 +118,19 @@ import type {
           <mat-icon>image</mat-icon>
           导出图片
         </button>
+      </div>
+
+      <!-- 锁定课撞停排提示：课程仍在原处，需教务继续调整 -->
+      <div class="suspension-warning-box" *ngIf="lockedSuspensionConflicts.length > 0">
+        <h4>
+          <mat-icon>warning</mat-icon>
+          以下已锁定课程恰好落在教师停排时段，已保留在原处，请人工继续调整（{{ lockedSuspensionConflicts.length }} 节）
+        </h4>
+        <ul>
+          <li *ngFor="let c of lockedSuspensionConflicts">
+            {{ c.message }}
+          </li>
+        </ul>
       </div>
 
       <div class="timetable-container" #timetableContainer>
@@ -128,7 +153,7 @@ import type {
                     {{ period.name }}
                   </td>
                   <td
-                    *ngFor="let day of [1,2,3,4,5]; let di = index"
+                    *ngFor="let day of weekDayNumbers; let di = index"
                     style="padding: 8px; border: 1px solid #ddd; vertical-align: top; min-height: 80px;"
                   >
                     <ng-container *ngFor="let entry of getEntryAt(day, i + 1)">
@@ -136,7 +161,10 @@ import type {
                         class="schedule-card"
                         [class.conflict-entry]="entry.is_conflict"
                         [class.locked-entry]="entry.is_locked"
-                        style="margin-bottom: 4px;"
+                        [class.suspension-entry]="entry.suspension_conflict"
+                        [class.selected-for-swap]="isSelectedForSwap(entry)"
+                        style="margin-bottom: 4px; cursor: pointer;"
+                        (click)="onCardClick(entry)"
                       >
                         <div class="schedule-course">{{ entry.course_name }}</div>
                         <div class="schedule-detail">{{ entry.teacher_name }}</div>
@@ -145,14 +173,20 @@ import type {
                         <div style="margin-top: 4px; display: flex; gap: 4px; flex-wrap: wrap;">
                           <mat-chip *ngIf="entry.is_locked" color="accent" selected>锁定</mat-chip>
                           <mat-chip *ngIf="entry.is_conflict" color="warn" selected>冲突</mat-chip>
+                          <mat-chip *ngIf="entry.suspension_conflict" color="warn" selected>
+                            撞停排{{ entry.suspension_date ? '·' + entry.suspension_date : '' }}
+                          </mat-chip>
                           <button
                             mat-icon-button
                             size="small"
-                            (click)="toggleLock(entry)"
+                            (click)="toggleLock(entry, $event)"
                             [title]="entry.is_locked ? '解锁' : '锁定'"
                           >
                             <mat-icon>{{ entry.is_locked ? 'lock' : 'lock_open' }}</mat-icon>
                           </button>
+                        </div>
+                        <div class="suspension-detail" *ngIf="entry.suspension_conflict">
+                          停排原因：{{ entry.suspension_reason }}
                         </div>
                       </mat-card>
                     </ng-container>
@@ -197,8 +231,11 @@ export class TimetableComponent implements OnInit {
   viewMode: 'class' | 'teacher' | 'classroom' = 'class';
   schedulingMessage: string = '';
   currentSemester: Semester | null = null;
+  lockedSuspensionConflicts: LockedSuspensionConflict[] = [];
+  swapSelections: number[] = [];
 
   weekDays = ['星期一', '星期二', '星期三', '星期四', '星期五'];
+  weekDayNumbers = [1, 2, 3, 4, 5];
   periods = [
     { name: '第1节', order: 1 },
     { name: '第2节', order: 2 },
@@ -250,6 +287,7 @@ export class TimetableComponent implements OnInit {
         this.selectedSemesterId = active.id;
         this.currentSemester = active;
         this.updatePeriodsFromSemester();
+        this.updateWeekDaysFromSemester();
         this.loadSchedules();
       }
     });
@@ -291,16 +329,27 @@ export class TimetableComponent implements OnInit {
     }
   }
 
+  updateWeekDaysFromSemester(): void {
+    const names = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'];
+    const days = this.currentSemester?.weekly_days || 5;
+    this.weekDayNumbers = Array.from({ length: Math.min(days, 7) }, (_, i) => i + 1);
+    this.weekDays = names.slice(0, this.weekDayNumbers.length);
+  }
+
   onSemesterChange(): void {
     if (this.selectedSemesterId) {
       this.currentSemester = this.semesters.find(s => s.id === this.selectedSemesterId) || null;
       this.updatePeriodsFromSemester();
+      this.updateWeekDaysFromSemester();
+      this.lockedSuspensionConflicts = [];
+      this.clearSwapSelection();
       this.loadSchedules();
     }
   }
 
   loadSchedules(): void {
     if (!this.selectedSemesterId) return;
+    this.clearSwapSelection();
 
     let obs;
     if (this.viewMode === 'class' && this.selectedClassId) {
@@ -313,7 +362,7 @@ export class TimetableComponent implements OnInit {
       obs = this.api.getSchedulesBySemester(this.selectedSemesterId);
     }
 
-    obs.subscribe(data => {
+    obs.subscribe((data: ScheduleEntry[]) => {
       this.schedules = data;
     });
   }
@@ -326,26 +375,90 @@ export class TimetableComponent implements OnInit {
     if (!this.selectedSemesterId) return;
     this.schedulingMessage = '正在自动排课，请稍候...';
 
-    this.api.autoSchedule(this.selectedSemesterId, respectLocked).subscribe(result => {
-      const total = result.total_entries || 0;
-      const conflicts = (result.conflicts || []).length;
-      const messages = result.scheduling_messages || [];
+    this.api.autoSchedule(this.selectedSemesterId, respectLocked).subscribe({
+      next: (result: AutoScheduleResult) => {
+        const total = result.total_entries || 0;
+        const conflicts = (result.conflicts || []).length;
+        const messages = result.scheduling_messages || [];
+        this.lockedSuspensionConflicts = result.locked_suspension_conflicts || [];
 
-      let msg = `排课完成！共安排 ${total} 节课`;
-      if (conflicts > 0) {
-        msg += `，发现 ${conflicts} 个冲突`;
+        let msg = `排课完成！共安排 ${total} 节课`;
+        if (conflicts > 0) {
+          msg += `，发现 ${conflicts} 个冲突`;
+        }
+        if (this.lockedSuspensionConflicts.length > 0) {
+          msg += `，${this.lockedSuspensionConflicts.length} 节已锁定课程落在停排时段（见上方提示，已保留原处）`;
+        }
+        if (messages.length > 0) {
+          msg += `。提示: ${messages.map(m => m.message).join('; ')}`;
+        }
+        this.schedulingMessage = msg;
+        this.loadSchedules();
+      },
+      error: err => {
+        this.schedulingMessage = '排课失败：' + (err?.error?.error || '请稍后重试');
       }
-      if (messages.length > 0) {
-        msg += `。提示: ${messages.map((m: any) => m.message).join('; ')}`;
-      }
-      this.schedulingMessage = msg;
-      this.loadSchedules();
     });
   }
 
-  toggleLock(entry: ScheduleEntry): void {
+  toggleLock(entry: ScheduleEntry, event: Event): void {
+    event.stopPropagation();
     this.api.updateScheduleEntry(entry.id, { is_locked: !entry.is_locked }).subscribe(() => {
       entry.is_locked = !entry.is_locked;
+    });
+  }
+
+  // ================= 手工互换 =================
+
+  onCardClick(entry: ScheduleEntry): void {
+    const idx = this.swapSelections.indexOf(entry.id);
+    if (idx >= 0) {
+      this.swapSelections.splice(idx, 1);
+      return;
+    }
+    if (this.swapSelections.length >= 2) {
+      this.swapSelections = [entry.id];
+      return;
+    }
+    this.swapSelections.push(entry.id);
+  }
+
+  isSelectedForSwap(entry: ScheduleEntry): boolean {
+    return this.swapSelections.includes(entry.id);
+  }
+
+  clearSwapSelection(): void {
+    this.swapSelections = [];
+  }
+
+  swapSelected(): void {
+    if (this.swapSelections.length !== 2) return;
+    const [id1, id2] = this.swapSelections;
+    const e1 = this.schedules.find(e => e.id === id1);
+    const e2 = this.schedules.find(e => e.id === id2);
+    if (!e1 || !e2) return;
+
+    const label = (e: ScheduleEntry) =>
+      `周${e.day_of_week}第${e.period}节 ${e.course_name}（${e.teacher_name}）`;
+
+    if (!confirm(`确定互换以下两节课吗？\n1) ${label(e1)}\n2) ${label(e2)}`)) {
+      return;
+    }
+
+    const reason = prompt('请填写互换原因（可留空）：') || undefined;
+    this.api.swapEntries(id1, id2, reason).subscribe({
+      next: () => {
+        this.schedulingMessage = '两节课已互换';
+        this.clearSwapSelection();
+        this.loadSchedules();
+      },
+      error: err => {
+        const errors: string[] = err?.error?.errors || [];
+        alert('互换校验未通过，已取消操作：\n' + (
+          errors.length ? errors.map(x => '· ' + x).join('\n')
+                        : (err?.error?.error || '未知错误')
+        ));
+      }
     });
   }
 
