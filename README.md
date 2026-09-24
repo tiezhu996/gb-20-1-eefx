@@ -79,7 +79,8 @@ npm start
 | 学期管理 | 配置学期日期、每日时间段、每周上课天数 |
 | 课程分配 | 为每个班级配置课程和任课教师 |
 | 自动排课 | 基于约束满足问题(CSP)的智能排课算法 |
-| 手动调整 | 支持锁定课程、拖拽调整（后端API就绪） |
+| 手动调整 | 支持锁定课程、点选两节课互换（互换前校验停排/锁定/冲突） |
+| 临时停排 | 教师请假、校外培训等日期可登记连续节次停排，支持取消 |
 | 冲突检测 | 自动检测教师/教室/班级三类时间冲突 |
 | 调课代课 | 支持课程交换和教师代课安排 |
 | 课表查看 | 班级/教师/教室三种视角的课表展示 |
@@ -242,8 +243,14 @@ docker compose exec backend python manage.py createsuperuser
   - 同一教室同一时间只能安排一门课
   - 同一班级同一时间只能上一门课
   - 教师可用时间段限制
+  - 教师临时停排时段不安排课程（具体日期按周几/节次映射到周课表）
   - 教室容量限制
   - 课程对教室类型的要求
+
+> 已锁定的课在重新排课时保留原处不移动；若锁定课恰好落在教师停排时段，
+> 会在自动排课结果的 `locked_suspension_warnings` 中单独标出，课表上以橙色"停排"标记提示教务继续调整。
+> 手工互换两节课前必须通过校验：停排冲突与跨学期互换一律拒绝；锁定、教师/教室/班级时间冲突
+> 需确认后以 `force=true` 强制执行。
 
 - **软约束（优先级）**：
   - 高优先级课程（主科）优先安排在上午
@@ -263,9 +270,12 @@ docker compose exec backend python manage.py createsuperuser
 | `/api/schedules/by_class/?semester_id=&class_id=` | GET | 按班级查询课表 |
 | `/api/schedules/by_teacher/?semester_id=&teacher_id=` | GET | 按教师查询课表 |
 | `/api/schedules/by_classroom/?semester_id=&classroom_id=` | GET | 按教室查询课表 |
-| `/api/schedules/auto_schedule/` | POST | 执行自动排课 |
-| `/api/schedules/swap/` | POST | 交换两个课表条目 |
+| `/api/schedules/auto_schedule/` | POST | 执行自动排课（避开教师临时停排；锁定课保留原处） |
+| `/api/schedules/swap/validate/` | POST | 校验两节课互换（返回停排/锁定/冲突问题，不执行） |
+| `/api/schedules/swap/` | POST | 交换两个课表条目（`force=true` 可覆盖锁定/冲突警告） |
 | `/api/schedules/substitute/` | POST | 安排代课教师 |
+| `/api/teacher-suspensions/` | GET/POST | 临时停排查询/登记（支持 teacher_id、is_active 筛选） |
+| `/api/teacher-suspensions/{id}/cancel/` | POST | 取消临时停排（保留记录） |
 | `/api/schedules/export_pdf/?type=&id=&semester_id=` | GET | 导出 PDF 课表 |
 | `/api/conflicts/` | GET | 查询冲突列表 |
 

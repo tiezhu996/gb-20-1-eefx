@@ -4,7 +4,8 @@ import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 import type {
   Classroom, Teacher, Class, Course, Semester,
-  ClassCourse, ScheduleEntry, Conflict, SwapRequest, Substitute
+  ClassCourse, ScheduleEntry, Conflict, SwapRequest, Substitute,
+  TeacherSuspension, SwapValidationResult
 } from '../types';
 
 @Injectable({ providedIn: 'root' })
@@ -144,12 +145,37 @@ export class ApiService {
     });
   }
 
-  swapEntries(entry1Id: number, entry2Id: number, reason?: string): Observable<any> {
+  validateSwap(entry1Id: number, entry2Id: number): Observable<SwapValidationResult> {
+    return this.http.post<SwapValidationResult>(`${this.baseUrl}/schedules/swap/validate/`, {
+      entry1_id: entry1Id,
+      entry2_id: entry2Id
+    });
+  }
+
+  swapEntries(entry1Id: number, entry2Id: number, reason?: string, force = false): Observable<any> {
     return this.http.post(`${this.baseUrl}/schedules/swap/`, {
       entry1_id: entry1Id,
       entry2_id: entry2Id,
-      reason
+      reason,
+      force
     });
+  }
+
+  getTeacherSuspensions(params?: { teacher_id?: number; is_active?: boolean }): Observable<TeacherSuspension[]> {
+    let httpParams = new HttpParams();
+    if (params?.teacher_id) httpParams = httpParams.set('teacher_id', params.teacher_id.toString());
+    if (params?.is_active !== undefined) {
+      httpParams = httpParams.set('is_active', params.is_active ? 'true' : 'false');
+    }
+    return this.http.get<TeacherSuspension[]>(`${this.baseUrl}/teacher-suspensions/`, { params: httpParams });
+  }
+
+  createTeacherSuspension(data: Partial<TeacherSuspension>): Observable<TeacherSuspension> {
+    return this.http.post<TeacherSuspension>(`${this.baseUrl}/teacher-suspensions/`, data);
+  }
+
+  cancelTeacherSuspension(id: number): Observable<any> {
+    return this.http.post(`${this.baseUrl}/teacher-suspensions/${id}/cancel/`, {});
   }
 
   assignSubstitute(entryId: number, substituteTeacherId: number, startDate: string, endDate: string, reason: string): Observable<any> {

@@ -68,9 +68,12 @@ class CSPScheduler:
         teacher_id: int,
         class_id: int,
         classroom_id: int,
-        teacher_available_slots: Set[TimeSlot]
+        teacher_available_slots: Set[TimeSlot],
+        teacher_blocked_slots: Optional[Set[Tuple[int, int]]] = None
     ) -> bool:
         if teacher_available_slots and time_slot not in teacher_available_slots:
+            return False
+        if teacher_blocked_slots and (time_slot.day, time_slot.period) in teacher_blocked_slots:
             return False
         if time_slot in self.teacher_usage[teacher_id]:
             return False
@@ -101,13 +104,15 @@ class CSPScheduler:
         tasks: List[SchedulingTask],
         classrooms_data: Dict[int, Dict],
         teachers_data: Dict[int, Dict],
-        locked_entries: Optional[List[Dict]] = None
+        locked_entries: Optional[List[Dict]] = None,
+        blocked_teacher_slots: Optional[Dict[int, Set[Tuple[int, int]]]] = None
     ) -> Tuple[List[Dict], List[Dict]]:
         self.assignments = []
         self.conflicts = []
         self.classroom_usage.clear()
         self.teacher_usage.clear()
         self.class_usage.clear()
+        blocked_teacher_slots = blocked_teacher_slots or {}
 
         if locked_entries:
             for entry in locked_entries:
@@ -160,7 +165,8 @@ class CSPScheduler:
                         task.teacher_id,
                         task.class_id,
                         room,
-                        teacher_available
+                        teacher_available,
+                        blocked_teacher_slots.get(task.teacher_id)
                     ):
                         available_room = room
                         break

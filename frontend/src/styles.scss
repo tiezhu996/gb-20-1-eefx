@@ -72,6 +72,95 @@ mat-sidenav {
   border-left: 4px solid #fbc02d;
 }
 
+.suspension-entry {
+  background-color: #ffe0b2 !important;
+  border-left: 4px solid #ef6c00;
+}
+
+.swap-selected {
+  outline: 3px solid #1976d2;
+  outline-offset: 1px;
+}
+
+.suspension-chip {
+  background-color: #ef6c00 !important;
+  color: white !important;
+  max-height: 22px;
+  font-size: 11px;
+}
+
+.swap-hint {
+  margin-bottom: 12px;
+  background-color: #e3f2fd;
+}
+
+.swap-hint mat-card-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  margin: 0;
+}
+
+.warning-panel {
+  background-color: #fff3e0;
+  border: 1px solid #ef6c00;
+  border-radius: 4px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.warning-panel h4 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  color: #e65100;
+}
+
+.warning-panel ul {
+  margin: 0 0 8px;
+  padding-left: 24px;
+}
+
+.warning-panel li {
+  color: #bf360c;
+  margin-bottom: 4px;
+}
+
+.suspension-panel {
+  max-width: 720px;
+  background: #fafafa;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 20px;
+  margin-bottom: 24px;
+}
+
+.suspension-hint {
+  color: #666;
+  font-size: 13px;
+}
+
+.suspension-error {
+  color: #c62828;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.suspension-active {
+  color: #e65100;
+  font-weight: 500;
+}
+
+.suspension-cancelled {
+  color: #999;
+}
+
+.row-cancelled {
+  opacity: 0.6;
+}
+
 .substitute-entry {
   background-color: #e1bee7 !important;
   border-left: 4px solid #7b1fa2;

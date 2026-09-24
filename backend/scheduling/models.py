@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 from core.models import Classroom, Teacher, Class, Course, Semester
 
 
@@ -45,11 +46,57 @@ class ScheduleEntry(models.Model):
                 f"周{self.day_of_week}第{self.period}节")
 
 
+class TeacherSuspension(models.Model):
+    """教师临时停排：教师在某个具体日期的连续几节课不参与排课"""
+
+    teacher = models.ForeignKey(
+        Teacher, on_delete=models.CASCADE,
+        related_name='suspensions', help_text='停排教师'
+    )
+    date = models.DateField(help_text='停排具体日期')
+    start_period = models.PositiveIntegerField(default=1, help_text='从第几节开始')
+    period_count = models.PositiveIntegerField(default=1, help_text='连续停排的节数')
+    reason = models.CharField(max_length=200, help_text='停排原因，如请假、校外培训')
+    is_active = models.BooleanField(default=True, help_text='取消后置为 False')
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-date', '-created_at']
+
+    def __str__(self):
+        return (f"{self.teacher.name} 停排 {self.date} "
+                f"第{self.start_period}-{self.end_period}节")
+
+    @property
+    def end_period(self) -> int:
+        return self.start_period + self.period_count - 1
+
+    @property
+    def day_of_week(self) -> int:
+        """Python isoweekday：1=周一 ... 7=周日，与 ScheduleEntry.day_of_week 一致"""
+        return self.date.isoweekday()
+
+    def covers(self, day_of_week: int, period: int) -> bool:
+        return (
+            self.day_of_week == day_of_week
+            and self.start_period <= period <= self.end_period
+        )
+
+    def cancel(self):
+        """取消停排（保留记录供追溯），后续排课不再避开此时段。"""
+        self.is_active = False
+        self.cancelled_at = timezone.now()
+        self.save(update_fields=['is_active', 'cancelled_at', 'updated_at'])
+
+
 class Conflict(models.Model):
     CONFLICT_TYPES = [
         ('teacher', '教师冲突'),
         ('classroom', '教室冲突'),
         ('class', '班级冲突'),
+        ('suspension', '停排冲突'),
     ]
 
     semester = models.ForeignKey(Semester, on_delete=models.CASCADE)

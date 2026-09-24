@@ -69,6 +69,16 @@ export interface ClassCourse {
   weekly_hours?: number;
 }
 
+export interface SuspensionFlag {
+  suspension_id: number;
+  teacher_id: number;
+  date: string;
+  start_period: number;
+  end_period: number;
+  period_count: number;
+  reason: string;
+}
+
 export interface ScheduleEntry {
   id: number;
   semester: number;
@@ -87,8 +97,22 @@ export interface ScheduleEntry {
   teacher_name?: string;
   classroom_name?: string;
   class_name?: string;
+  suspension_flags?: SuspensionFlag[];
   created_at?: string;
   updated_at?: string;
+}
+
+export interface SwapIssue {
+  code: string;
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+  entry_id?: number;
+}
+
+export interface SwapValidationResult {
+  valid: boolean;
+  forceable: boolean;
+  issues: SwapIssue[];
 }
 
 export interface Conflict {
@@ -132,4 +156,37 @@ export interface Substitute {
   substitute_teacher_name?: string;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface TeacherSuspension {
+  id: number;
+  teacher: number;
+  teacher_name?: string;
+  date: string;
+  start_period: number;
+  period_count: number;
+  end_period?: number;
+  day_of_week?: number;
+  reason: string;
+  is_active: boolean;
+  cancelled_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface LockedSuspensionWarning {
+  entry_id: number;
+  teacher_id: number;
+  teacher_name: string;
+  class_name: string;
+  course_name: string;
+  day_of_week: number;
+  period: number;
+  is_locked: boolean;
+  suspension_id: number;
+  date: string;
+  start_period: number;
+  end_period: number;
+  period_count: number;
+  reason: string;
 }
